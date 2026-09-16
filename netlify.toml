@@ -1,0 +1,10 @@
+# Configuración de Netlify para Caja Monroe Web.
+# - "publish" es la carpeta que se sirve tal cual (acá, la raíz: index.html y todo lo demás).
+# - "functions" es dónde vive la función que esconde la clave de la API de Anthropic para el
+#   asistente con IA -- ver netlify/functions/asistente.js.
+[build]
+  publish = "."
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
