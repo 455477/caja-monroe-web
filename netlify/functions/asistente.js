@@ -13,7 +13,7 @@
 //   ANTHROPIC_API_KEY = la clave que se saca en https://console.anthropic.com/settings/keys
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
-const MODEL = 'claude-haiku-4-5-20251001'; // el modelo más rápido/económico de Anthropic -- de sobra para esto
+const MODEL = 'claude-sonnet-5'; // más preciso con números y cálculos que el modelo económico (Haiku); para el volumen de una ferretería sigue costando centavos por mes
 const MAX_PREGUNTA_CHARS = 2000;
 const MAX_CONTEXTO_CHARS = 200000; // recorte de seguridad; en el uso normal de una ferretería no se llega ni cerca
 
@@ -61,6 +61,8 @@ exports.handler = async function (event) {
     'Tu ÚNICA fuente de información es el JSON de datos de abajo: son los datos reales que esa persona ya cargó en la app, tal como están en este momento.',
     'No inventes proveedores, montos ni fechas que no estén en ese JSON. Si la pregunta no se puede responder con estos datos, decilo con claridad en vez de inventar una respuesta.',
     'Los montos son en pesos argentinos: usá el signo $ y separador de miles con punto, por ejemplo $125.000.',
+    'MUY IMPORTANTE sobre los números: nunca redondees, aproximes ni "calcules de memoria". Cuando tengas que sumar o totalizar varios valores del JSON (por ejemplo, un análisis del mes o un total adeudado), primero identificá exactamente qué campos y registros del JSON vas a usar, sumalos paso a paso mostrando esa cuenta de forma breve, y recién ahí dale el resultado final. Si un dato puntual no aparece en el JSON, decí explícitamente que no lo tenés en vez de estimarlo.',
+    'Antes de responder con una cifra final, releé el JSON y verificá que ese número realmente está ahí (o es la suma exacta de valores que están ahí) -- una cifra equivocada es peor que no responder.',
     'Nunca menciones la palabra "JSON", "contexto" ni cómo está armada esta información -- respondé la pregunta directo, como si ya supieras estos datos de memoria.',
     '',
     'DATOS ACTUALES DE LA FERRETERÍA:',
@@ -77,7 +79,7 @@ exports.handler = async function (event) {
       },
       body: JSON.stringify({
         model: MODEL,
-        max_tokens: 1024,
+        max_tokens: 2048,
         system: systemPrompt,
         messages: [{ role: 'user', content: pregunta }]
       })
