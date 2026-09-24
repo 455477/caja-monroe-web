@@ -1764,14 +1764,9 @@
   };
   var AUTH_SALT = 'ferreteria-monroe-2026';
   var SESSION_KEY = 'cajaMonroeSession_v1';
-  // Usuarios "de fábrica": se crean solos la primera vez que alguien abre la app (si todavía no
-  // existe ningún usuario guardado) con estas claves iniciales. Contale a cada uno la suya por
-  // WhatsApp — después, cada uno puede entrar a "Cambiar clave" y ponerse la que quiera.
-  var SEED_USERS = [
-    { username: 'esteban', displayName: 'Esteban', role: 'admin', pass: 'admin2026' },
-    { username: 'flavio', displayName: 'Flavio', role: 'user', pass: 'flavio2026' },
-    { username: 'gaby', displayName: 'Gaby', role: 'user', pass: 'gaby2026' }
-  ];
+  // Los usuarios (Esteban, Flavio, Gaby) ya están creados en Firebase, así que no hace falta
+  // ninguna clave inicial escrita acá. Cada uno cambia la suya desde "Cambiar clave".
+  var SEED_USERS = [];
   function authHashFallback(text){
     // Si por lo que sea no está disponible crypto.subtle (contexto no seguro, navegador viejo),
     // usamos un hash bien simple en vez de romper el login por completo. No es criptográficamente
