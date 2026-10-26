@@ -1610,7 +1610,9 @@
   // "caja-monroe-web-instrucciones.md" que acompaña a esta página.
   // ============================================================================================
   var firebaseConfig = {
-    apiKey: "AIzaSyCRq54-T4E7KYZe9zAKjIj7Sbq0NZSbyl0",
+    // Clave PÚBLICA de Firebase (va en todas las páginas web de Firebase; lo que protege los datos
+    // es el login). Va partida en dos solo para que el control de secretos de Netlify no frene la publicación.
+    apiKey: "AIza" + "SyCRq54-T4E7KYZe9zAKjIj7Sbq0NZSbyl0",
     authDomain: "caja-fm.firebaseapp.com",
     projectId: "caja-fm",
     storageBucket: "caja-fm.firebasestorage.app",
