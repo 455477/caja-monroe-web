@@ -2293,14 +2293,38 @@
     aiStatusBadge.title = title || '';
   }
 
+  // Versión web (fuera de Claude): la foto se manda a la función leer-cierre de Netlify, que usa la
+  // misma clave de la IA que el lector de facturas. Imita sampleNs.json() para no tocar el resto.
+  var webSample = {
+    json: function(prompt, opts){
+      var img = opts && opts.images;
+      return iaFacImagen(img).then(function(archivo){
+        return fetch('/.netlify/functions/leer-cierre', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ archivo: archivo, contexto: BIZ_CONFIG.photoContext })
+        });
+      }).then(function(r){
+        return r.json().catch(function(){ return {}; }).then(function(d){
+          if(!r.ok){ var e = new Error(d.error || ('Error ' + r.status)); e.code = d.code || 'web_error'; throw e; }
+          return d.data;
+        });
+      });
+    }
+  };
+  function usarIaWeb(){
+    sampleNs = webSample;
+    sampleImagesOk = true;
+    setAiBadge('lista', 'ok', 'Lee la foto con la IA de Caja Monroe.');
+    updateLeerFotoVisibility();
+  }
   function initSample(){
     if(typeof window.claude === 'undefined' || !window.claude.use){
-      setAiBadge('no disponible', 'off', 'window.claude no existe en esta página.');
+      usarIaWeb();
       return;
     }
     window.claude.use('sample').then(function(s){
       if(!s){
-        setAiBadge('no disponible', 'off', 'claude.use("sample") devolvió null: la capacidad no está habilitada en esta vista.');
+        usarIaWeb();
         return;
       }
       sampleNs = s;
