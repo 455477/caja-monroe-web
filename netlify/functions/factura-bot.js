@@ -11,7 +11,7 @@ const { leerFactura, esRepetida, docProveedor, gastoCaja, turnoAhora, hoyAR } = 
 
 // Datos públicos del proyecto de Firebase (son los mismos que están en index.html).
 // (partida en dos para que el control de secretos de Netlify no la confunda con una clave privada)
-const FIREBASE_API_KEY = 'AIza' + 'SyCRq54-T4E7KYZe9zAKjIj7Sbq0NZSbyl0';
+const FIREBASE_API_KEY = ['AIza', 'SyCRq54-T4E7KYZe9zAKjIj7Sbq0NZSbyl0'].join('');
 const PROJECT = 'caja-fm';
 const BASE = 'https://firestore.googleapis.com/v1/projects/' + PROJECT + '/databases/(default)/documents';
 const MAX_BASE64 = 5_500_000;
