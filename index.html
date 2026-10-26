@@ -725,6 +725,20 @@
     border:1px solid var(--line); border-radius:12px; padding:11px 13px; margin-bottom:8px; box-shadow:var(--shadow);
   }
   .prov-row.prioridad{ border-color:var(--bad); background:var(--bad-soft); }
+  .ia-fac-wrap{ display:flex; flex-wrap:wrap; gap:8px; margin:10px 0 0; }
+  .ia-fac-wrap .add-gasto{ flex:1 1 200px; }
+  .ia-fac-list{ display:flex; flex-direction:column; gap:10px; margin-top:12px; }
+  .ia-fac-list:empty{ display:none; }
+  .ia-fac-item{ background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:12px 14px; font-size:13.5px; line-height:1.5; }
+  .ia-fac-item .t{ font-weight:700; }
+  .ia-fac-item .m{ color:var(--muted); font-size:12.5px; }
+  .ia-fac-item.ok{ border-color:var(--good); }
+  .ia-fac-item.err{ border-color:var(--bad); }
+  .ia-fac-item.err .t{ color:var(--bad); }
+  .ia-fac-q{ display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+  .ia-fac-q button{ border:1px solid var(--line); background:var(--surface); color:inherit; border-radius:9px; padding:8px 12px; font:inherit; font-weight:600; cursor:pointer; }
+  .ia-fac-q button.si{ background:var(--good); color:#fff; border-color:var(--good); }
+  .ia-fac-q button:disabled{ opacity:.5; cursor:default; }
   .prov-row.pagado{ opacity:.55; }
   .prov-row.pagado .prov-monto{ text-decoration:line-through; }
   .prov-row.parcial{ border-color:var(--accent); background:var(--accent-soft); }
@@ -1134,6 +1148,14 @@
 
     <div class="prov-form-wrap">
       <button class="add-gasto" id="toggleProvForm" type="button">+ Agregar factura</button>
+      <div class="ia-fac-wrap">
+        <button class="add-gasto" id="iaFacFoto" type="button">📷 Sacar foto a una factura</button>
+        <button class="add-gasto" id="iaFacSubir" type="button">🤖 Subir facturas (fotos o PDF)</button>
+        <input type="file" accept="image/*" capture="environment" id="iaFacFotoInput" style="display:none" />
+        <input type="file" accept="image/*,application/pdf" multiple id="iaFacSubirInput" style="display:none" />
+      </div>
+      <p class="photo-hint">La IA lee la factura y la carga sola en Proveedores. Si la pagaste en efectivo, también la anota como gasto en la caja de hoy.</p>
+      <div class="ia-fac-list" id="iaFacList" aria-live="polite"></div>
       <div class="prov-form" id="provForm" hidden>
         <div class="field">
           <label for="pfProveedor">Proveedor</label>
@@ -1726,6 +1748,7 @@
     historyDocs: [],
     provDocs: [],
     provEditingId: null,
+    gastosQuitados: {},  // gastos que vinieron de una factura y alguien sacó a mano en este turno
     formPagos: [],
     formPagosParciales: [],
     contactos: {},
@@ -2131,6 +2154,7 @@
       descInp.addEventListener('input', function(){ g.desc = descInp.value; });
       montoInp.addEventListener('input', function(){ g.monto = parseFloat(montoInp.value)||0; renderTotals(); });
       rmBtn.addEventListener('click', function(){
+        if(g.facturaId) state.gastosQuitados[g.facturaId] = true;
         state.entry.gastos.splice(i,1);
         renderGastos();
         renderTotals();
@@ -3504,6 +3528,7 @@
   var loadToken = 0;
   function loadEntry(){
     var myToken = ++loadToken;
+    state.gastosQuitados = {};
     state.entry = emptyEntry(state.date, state.turno);
     fillForm();
     // El turno recién puesto en blanco es la nueva base para "cambios sin guardar": si no, cambiar
@@ -3587,7 +3612,24 @@
     saveBtn.disabled = true;
     saveBtn.textContent = 'Guardando…';
     state.entry.updatedAt = new Date().toISOString();
-    state.db.doc(docPath()).set(state.entry).then(function(){
+    var ref = state.db.doc(docPath());
+    ref.get().then(function(snap){
+      // Si mientras esta pantalla estaba abierta se cargó una factura pagada en efectivo (desde el
+      // bot de Telegram o desde otro celular), su gasto ya está guardado en este turno: lo sumamos
+      // antes de guardar para no borrarlo sin querer.
+      var guardados = (snap.exists && Array.isArray(snap.data().gastos)) ? snap.data().gastos : [];
+      var locales = {};
+      state.entry.gastos.forEach(function(g){ if(g.facturaId) locales[g.facturaId] = true; });
+      var agregados = 0;
+      guardados.forEach(function(g){
+        if(g && g.facturaId && !locales[g.facturaId] && !state.gastosQuitados[g.facturaId]){
+          state.entry.gastos.push({ desc: g.desc || '', monto: Number(g.monto) || 0, facturaId: g.facturaId });
+          agregados++;
+        }
+      });
+      if(agregados){ renderGastos(); renderTotals(); }
+      return ref.set(state.entry);
+    }).then(function(){
       saveBtn.textContent = 'Guardar turno';
       saveBtn.disabled = false;
       var now = new Date();
@@ -4048,6 +4090,187 @@
       state.db.doc('proveedores/' + id).set(data).then(done).catch(fail);
     }
   });
+
+  // ---------- Facturas con IA ----------
+  // Foto o PDF → la función leer-factura (en Netlify, con la clave de la IA) devuelve los datos →
+  // se guarda sola en Proveedores con el mismo formato que el formulario. Lo único que se pregunta
+  // es si se pagó en efectivo: en ese caso queda pagada y va como gasto a la caja de hoy.
+  var IA_FAC_ENDPOINT = '/.netlify/functions/leer-factura';
+  var iaFacList = $('iaFacList');
+  var iaFacFotoInput = $('iaFacFotoInput'), iaFacSubirInput = $('iaFacSubirInput');
+  var iaFacCola = Promise.resolve();
+  $('iaFacFoto').addEventListener('click', function(){ iaFacFotoInput.click(); });
+  $('iaFacSubir').addEventListener('click', function(){ iaFacSubirInput.click(); });
+  function iaFacTomar(input){
+    var files = Array.prototype.slice.call(input.files || []);
+    input.value = '';
+    files.forEach(function(f){ iaFacCola = iaFacCola.then(function(){ return iaFacProcesar(f); }); });
+  }
+  iaFacFotoInput.addEventListener('change', function(){ iaFacTomar(iaFacFotoInput); });
+  iaFacSubirInput.addEventListener('change', function(){ iaFacTomar(iaFacSubirInput); });
+
+  function iaFacNorm(s){
+    return String(s || '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '')
+      .replace(/\b(s\.?\s?a\.?|s\.?\s?r\.?\s?l\.?|srl|sa|sas)\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+  }
+  function iaFacDig(s){ return String(s || '').replace(/\D/g, '').replace(/^0+/, ''); }
+  function iaFacUltimo(s){ var m = String(s || '').match(/\d+/g); return m ? m.pop().replace(/^0+/, '') : ''; }
+  function iaFacMismoNumero(a, b){
+    if(!iaFacDig(a) || !iaFacDig(b)) return false;
+    return iaFacDig(a) === iaFacDig(b) || (!!iaFacUltimo(a) && iaFacUltimo(a) === iaFacUltimo(b));
+  }
+  function iaFacRepetida(f){
+    if(!iaFacDig(f.numero)) return null;
+    var prov = iaFacNorm(f.proveedor);
+    return state.provDocs.find(function(d){ return iaFacNorm(d.proveedor) === prov && iaFacMismoNumero(d.numero, f.numero); }) || null;
+  }
+  function iaFacTurnoAhora(){ return (new Date().getHours() < 15) ? 'TM' : 'TT'; }
+
+  // Foto: se achica a un tamaño que la IA lee bien y que entra en el pedido (máx. ~4 MB).
+  function iaFacImagen(file){
+    return new Promise(function(resolve, reject){
+      var url = URL.createObjectURL(file);
+      var img = new Image();
+      img.onload = function(){
+        try{
+          var tamanos = [2200, 1800, 1500, 1200];
+          var data = null;
+          for(var i=0; i<tamanos.length; i++){
+            var esc = Math.min(1, tamanos[i] / Math.max(img.width, img.height));
+            var c = document.createElement('canvas');
+            c.width = Math.max(1, Math.round(img.width*esc)); c.height = Math.max(1, Math.round(img.height*esc));
+            c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+            data = c.toDataURL('image/jpeg', 0.85);
+            if(data.length < 4000000) break;
+          }
+          URL.revokeObjectURL(url);
+          resolve({ data: data.split(',')[1], mime: 'image/jpeg' });
+        } catch(err){ URL.revokeObjectURL(url); reject(err); }
+      };
+      img.onerror = function(){ URL.revokeObjectURL(url); reject(new Error('No se pudo abrir la foto.')); };
+      img.src = url;
+    });
+  }
+  function iaFacPdf(file){
+    return new Promise(function(resolve, reject){
+      if(file.size > 4000000){ reject(new Error('El PDF pesa más de 4 MB. Probá sacándole una foto.')); return; }
+      var r = new FileReader();
+      r.onload = function(){ resolve({ data: String(r.result).split(',')[1], mime: 'application/pdf' }); };
+      r.onerror = function(){ reject(new Error('No se pudo abrir el PDF.')); };
+      r.readAsDataURL(file);
+    });
+  }
+
+  function iaFacTarjeta(nombreArchivo){
+    var el = document.createElement('div');
+    el.className = 'ia-fac-item';
+    el.innerHTML = '<div class="t">⏳ Leyendo ' + escapeHtml(nombreArchivo || 'la factura') + '…</div>';
+    iaFacList.insertBefore(el, iaFacList.firstChild);
+    return el;
+  }
+  function iaFacResumen(f){
+    var partes = [];
+    partes.push((f.tipo === 'Presupuesto' ? 'Presupuesto' : 'Factura' + (f.letra ? ' ' + f.letra : '')) + (f.numero ? ' N° ' + f.numero : ''));
+    partes.push('del ' + fmtDateShort(f.fecha));
+    if(f.vencimiento) partes.push('vence ' + fmtDateShort(f.vencimiento));
+    if(f.iva) partes.push('IVA ' + fmtMoneyDec(f.iva));
+    return '<div class="t">' + escapeHtml(f.proveedor) + ' · ' + fmtMoneyDec(f.total) + '</div>' +
+      '<div class="m">' + escapeHtml(partes.join(' · ')) + (f.proveedorNuevo ? ' · <b>proveedor nuevo</b>' : '') + '</div>' +
+      (f.confianza === 'baja' || f.nota ? '<div class="m">⚠️ ' + escapeHtml(f.nota || 'La foto no se leía del todo bien: revisá los datos.') + '</div>' : '');
+  }
+
+  function iaFacProcesar(file){
+    var el = iaFacTarjeta(file.name);
+    if(!state.db){
+      el.className = 'ia-fac-item err';
+      el.innerHTML = '<div class="t">Todavía se está conectando el guardado.</div><div class="m">Esperá un segundo y volvé a subir la factura.</div>';
+      return Promise.resolve();
+    }
+    var esPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '');
+    return (esPdf ? iaFacPdf(file) : iaFacImagen(file)).then(function(archivo){
+      var nombres = [];
+      state.provDocs.forEach(function(d){ if(d.proveedor && nombres.indexOf(d.proveedor) < 0) nombres.push(d.proveedor); });
+      return fetch(IA_FAC_ENDPOINT, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ archivo: archivo, proveedores: nombres }) })
+        .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(d){ if(!r.ok) throw new Error(d.error || ('Error ' + r.status)); return d.factura; }); });
+    }).then(function(f){
+      if(f.problema){
+        el.className = 'ia-fac-item err';
+        el.innerHTML = '<div class="t">No la cargué: ' + escapeHtml(f.problema) + '</div>' + (f.proveedor ? '<div class="m">' + escapeHtml(f.proveedor) + (f.total ? ' · ' + fmtMoneyDec(f.total) : '') + '</div>' : '') + '<div class="m">Si hace falta, cargala a mano con "+ Agregar factura".</div>';
+        return;
+      }
+      var rep = iaFacRepetida(f);
+      if(rep){
+        el.className = 'ia-fac-item err';
+        el.innerHTML = iaFacResumen(f) + '<div class="m">Ya estaba cargada (' + escapeHtml(rep.estado || 'pendiente') + '), no la cargué de nuevo.</div>';
+        return;
+      }
+      el.innerHTML = iaFacResumen(f) + '<div class="ia-fac-q"><span class="m" style="flex-basis:100%">¿La pagaste en efectivo?</span>' +
+        '<button type="button" class="si" data-r="si">Sí, en efectivo</button><button type="button" data-r="no">No, queda a pagar</button><button type="button" data-r="x">No cargar</button></div>';
+      return new Promise(function(resolve){
+        el.querySelector('.ia-fac-q').addEventListener('click', function(ev){
+          var b = ev.target.closest('button'); if(!b) return;
+          Array.prototype.forEach.call(el.querySelectorAll('.ia-fac-q button'), function(x){ x.disabled = true; });
+          var r = b.getAttribute('data-r');
+          if(r === 'x'){ el.innerHTML = iaFacResumen(f) + '<div class="m">No la cargué.</div>'; resolve(); return; }
+          iaFacGuardar(f, r === 'si').then(function(txt){
+            el.className = 'ia-fac-item ok';
+            el.innerHTML = iaFacResumen(f) + '<div class="m">✅ ' + escapeHtml(txt) + '</div>';
+          }).catch(function(err){
+            el.className = 'ia-fac-item err';
+            el.innerHTML = iaFacResumen(f) + '<div class="m">No se pudo guardar: ' + escapeHtml((err && err.message) || 'error') + '. Probá de nuevo subiéndola otra vez.</div>';
+          }).then(resolve);
+        });
+      });
+    }).catch(function(err){
+      el.className = 'ia-fac-item err';
+      el.innerHTML = '<div class="t">No pude leer ' + escapeHtml(file.name || 'la factura') + '</div><div class="m">' + escapeHtml((err && err.message) || 'Error desconocido') + '</div>';
+    });
+  }
+
+  function iaFacGuardar(f, efectivo){
+    var hoy = todayISO();
+    var monto = Number(f.total) || 0;
+    var id = 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2,8);
+    var data = {
+      proveedor: f.proveedor,
+      tipo: f.tipo === 'Presupuesto' ? 'Presupuesto' : 'Factura',
+      numero: f.numero || '',
+      fecha: f.fecha || hoy,
+      monto: monto,
+      semana: f.vencimiento || mondayOfWeek(hoy),
+      prioridad: false,
+      estado: efectivo ? 'pagado' : 'pendiente',
+      pagosParciales: efectivo ? [{ monto: monto, fecha: hoy }] : [],
+      montoPagado: efectivo ? monto : 0,
+      pagos: [],
+      letra: f.letra || null,
+      cuit: f.cuit || null,
+      neto: f.neto == null ? null : f.neto,
+      iva: f.iva == null ? null : f.iva,
+      cargadaPorIA: true,
+      cargadaPor: state.session ? state.session.displayName : null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    return state.db.doc('proveedores/' + id).set(data).then(function(){
+      logAudit('Cargó con IA la factura de ' + data.proveedor + ' (' + data.tipo + ' ' + (data.numero || 's/n') + ')' + (efectivo ? ', pagada en efectivo' : ''));
+      if(!efectivo) return 'Cargada en Proveedores, a pagar' + (f.vencimiento ? ' (vence ' + fmtDateShort(f.vencimiento) + ')' : '') + '.';
+      var turno = iaFacTurnoAhora();
+      var gasto = { desc: 'Pago ' + (data.tipo === 'Presupuesto' ? 'presupuesto' : 'factura') + ' ' + data.proveedor + (data.numero ? ' N° ' + data.numero : ''), monto: monto, facturaId: id };
+      var listo = 'Cargada como pagada y anotada como gasto en la caja de hoy (' + (turno === 'TM' ? 'turno mañana' : 'turno tarde') + ').';
+      if(state.entry && state.date === hoy && state.turno === turno && !state.photoBusy){
+        // Es el turno que está abierto en pantalla: lo agregamos ahí y guardamos el turno.
+        state.entry.gastos.push(gasto);
+        renderGastos(); renderTotals();
+        saveEntry();
+        return listo;
+      }
+      return state.db.doc('entries/' + hoy + '_' + turno).set({
+        date: hoy, turno: turno,
+        gastos: firebase.firestore.FieldValue.arrayUnion(gasto)
+      }, { merge: true }).then(function(){ return listo; });
+    });
+  }
 
   function handleProvRowAction(e){
     var btn = e.target.closest('.prov-icon-btn');
