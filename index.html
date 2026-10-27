@@ -1738,6 +1738,7 @@
       tarjeta: { monto: 0, personas: 0, obs: '' },
       gastos: [],
       foto: null,
+      ticket: null,   // lo facturado según el ticket del sistema/registradora (lo completa la IA al leer la foto)
       updatedAt: null
     };
   }
@@ -2379,6 +2380,39 @@
     return fmtMoney(v);
   }
 
+  // Pasa lo facturado del ticket al día correspondiente de "Registradora fiscal — por día" en IVA.
+  // El día suma los tickets de los dos turnos (si es el mismo ticket — mismo número — cuenta una vez),
+  // así volver a leer la foto no duplica nada.
+  function ivaDesdeTicket(fecha, turno, ticket){
+    if(!state.db) return Promise.reject(new Error('sin base'));
+    var otro = turno === 'TM' ? 'TT' : 'TM';
+    var mes = fecha.slice(0, 7);
+    var ref = state.db.doc('ivaMensual/' + mes);
+    return Promise.all([state.db.doc('entries/' + fecha + '_' + otro).get(), ref.get()]).then(function(r){
+      var t2 = r[0].exists ? r[0].data().ticket : null;
+      var neto = ticket.neto, iva = ticket.iva;
+      if(t2 && Number(t2.total) > 0 && !(t2.numero && ticket.numero && String(t2.numero) === String(ticket.numero))){
+        neto += Number(t2.neto) || 0; iva += Number(t2.iva) || 0;
+      }
+      neto = Math.round(neto * 100) / 100; iva = Math.round(iva * 100) / 100;
+      var d = r[1].exists ? r[1].data() : {};
+      var diario = Object.assign({}, d.diario || {});
+      diario[fecha] = { neto: neto, iva: iva };
+      var ventasItems = Array.isArray(d.ventasItems) ? d.ventasItems : [];
+      var totalVentas = ivaItemsTotal(ventasItems) + Object.keys(diario).reduce(function(s,k){ return s + (Number(diario[k].iva)||0); }, 0);
+      var totalCompras = Number(d.totalCompras) || 0;
+      return ref.set({ mes: mes, diario: diario, totalVentas: totalVentas, diferencia: totalVentas - totalCompras, updatedAt: new Date().toISOString() }, { merge: true }).then(function(){
+        // Si la pantalla de IVA está abierta en ese mes, que se vea el dato nuevo sin pisar lo que estén editando
+        if(ivaMonth.value === mes){
+          if(ivaHasUnsavedChanges()){ state.ivaDiario[fecha] = { neto: neto, iva: iva }; renderIvaLists(); }
+          else loadIvaMonth();
+        }
+        logAudit('Pasó el ticket del ' + fmtDateShort(fecha) + ' al IVA (IVA ' + fmtMoneyDec(iva) + ')');
+        return new Date(fecha + 'T12:00:00').toLocaleDateString('es-AR', { month: 'long', year: 'numeric' });
+      });
+    });
+  }
+
   btnLeerFoto.addEventListener('click', function(){
     if(!sampleNs || !state.entry.foto || sampleBusy) return;
     var imageSource = lastPhotoFile || dataUrlToBlob(state.entry.foto);
@@ -2417,6 +2451,29 @@
         }
       });
       fillForm();
+
+      var tk = data && data.ticket;
+      if(tk && tk.hay && Number(tk.total) > 0){
+        var t = {
+          numero: tk.numero ? String(tk.numero) : null,
+          fecha: /^\d{4}-\d{2}-\d{2}$/.test(String(tk.fecha || '')) ? tk.fecha : state.date,
+          total: Number(tk.total) || 0,
+          facturaA: Number(tk.facturaA) || 0,
+          facturaB: Number(tk.facturaB) || 0,
+          iva21: Number(tk.iva21) || 0,
+          iva105: Number(tk.iva105) || 0,
+          percepciones: Number(tk.percepciones) || 0
+        };
+        t.iva = Math.round((t.iva21 + t.iva105) * 100) / 100;
+        t.neto = Math.round((t.total - t.iva - t.percepciones) * 100) / 100;
+        state.entry.ticket = t;
+        applied.push('ticket: facturado ' + fmtMoneyDec(t.total) + ', IVA ' + fmtMoneyDec(t.iva));
+        ivaDesdeTicket(state.date, state.turno, t).then(function(mes){
+          photoAiResult.textContent += ' El IVA del ticket ya se sumó al IVA de ' + mes + '.';
+        }).catch(function(){
+          photoAiResult.textContent += ' (No se pudo pasar el IVA del ticket al apartado de IVA: cargalo a mano en "Registradora fiscal".)';
+        });
+      }
 
       if(applied.length){
         photoAiResult.textContent = '🤖 Detectado: ' + applied.join(' · ') + '. Revisá los datos antes de guardar.';
@@ -3591,6 +3648,7 @@
           tarjeta: Object.assign({ monto:0, personas:0, obs:'' }, d.tarjeta),
           gastos: Array.isArray(d.gastos) ? d.gastos.map(function(g){ return Object.assign({ desc:'', monto:0 }, g); }) : [],
           foto: d.foto || null,
+          ticket: d.ticket ? Object.assign({}, d.ticket) : null,
           updatedAt: d.updatedAt || null
         };
       }

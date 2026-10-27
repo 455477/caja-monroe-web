@@ -18,15 +18,17 @@ exports.handler = async function (event) {
   if (String(a.data).length > MAX_BASE64) return json(413, { error: 'La foto es muy pesada.' });
   const contexto = String(p.contexto || 'una ferretería').slice(0, 200);
 
-  const prompt = 'Esta es una foto de una planilla o papel escrito a mano (con birome) con el cierre de caja de ' + contexto + '. ' +
-    'El papel puede tener montos separados por método de pago: Efectivo, Mercado Pago (a veces "MP") y Tarjeta, ' +
-    'a veces con una lista de importes individuales por persona/cliente que hay que sumar, y a veces ya con un total anotado. ' +
-    'Leé la foto con cuidado y calculá el total de cada método de pago (si hay una lista de importes, sumalos vos con cuidado; si ya hay un total anotado, usá ese total). ' +
-    'También contá, si se puede, la cantidad de importes/personas anotadas en cada método. ' +
-    'Si un método de pago no aparece en la foto o no se puede leer, usá null para su monto y su cantidad de personas. ' +
-    'No inventes valores que no estén en la foto. ' +
+  const prompt = 'Esta es una foto del cierre de caja de ' + contexto + '. Puede tener DOS cosas distintas:\n' +
+    '1) Una planilla o papel escrito a mano (con birome) con columnas por método de pago: Efectivo ("E.F." o "EF"), Mercado Pago ("M.P." o "MP") y Tarjeta ("T"). ' +
+    'Cada columna tiene una lista de importes y a veces un total anotado abajo. Esto es TODO lo que entró en la caja. ' +
+    'Para cada método: si hay un total anotado abajo de la raya, usá ese total; si no, sumá vos los importes con cuidado. Contá también cuántos importes hay en cada columna (personas). ' +
+    'Si hay dos columnas de efectivo, sumalas. Los montos de la caja salen SOLO de esta planilla a mano, nunca del ticket impreso.\n' +
+    '2) Un ticket impreso del sistema o la registradora fiscal ("Planilla de caja", "Informe cierre de caja", "Cierre Z"). De ese ticket sacá solo lo facturado: ' +
+    'fecha, número del informe, total facturado, total de Factura A, total de Factura B, IVA 21%, IVA 10,5% y percepciones.\n' +
+    'Si algo no aparece o no se lee, usá null. No inventes valores. Los importes van como números con punto decimal (ej 23967.77), sin separador de miles. ' +
     'Respondé solo con un objeto JSON de esta forma exacta, sin texto antes ni después: ' +
-    '{"efectivo": {"monto": number|null, "personas": number|null}, "mercadopago": {"monto": number|null, "personas": number|null}, "tarjeta": {"monto": number|null, "personas": number|null}}';
+    '{"efectivo": {"monto": number|null, "personas": number|null}, "mercadopago": {"monto": number|null, "personas": number|null}, "tarjeta": {"monto": number|null, "personas": number|null}, ' +
+    '"ticket": {"hay": true|false, "fecha": "AAAA-MM-DD"|null, "numero": string|null, "total": number|null, "facturaA": number|null, "facturaB": number|null, "iva21": number|null, "iva105": number|null, "percepciones": number|null}}';
 
   try {
     const resp = await fetch(ANTHROPIC_API_URL, {
