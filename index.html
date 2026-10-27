@@ -733,6 +733,9 @@
   .ia-fac-item .t{ font-weight:700; }
   .ia-fac-item .m{ color:var(--muted); font-size:12.5px; }
   .ia-fac-item.ok{ border-color:var(--good); }
+  .ia-fac-item{ position:relative; transition:opacity .4s; }
+  .ia-fac-item.saliendo{ opacity:0; }
+  .ia-fac-x{ position:absolute; top:6px; right:8px; border:0; background:none; color:var(--muted); font-size:16px; cursor:pointer; padding:4px 6px; }
   .ia-fac-item.err{ border-color:var(--bad); }
   .ia-fac-item.err .t{ color:var(--bad); }
   .ia-fac-q{ display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
@@ -4194,6 +4197,19 @@
     iaFacList.insertBefore(el, iaFacList.firstChild);
     return el;
   }
+  // Las que ya se cargaron (o que ya estaban) se van solas a los pocos segundos; las que tuvieron un
+  // problema quedan hasta que alguien las cierra con la ✕.
+  function iaFacCerrable(el, segundos){
+    if(!el.querySelector('.ia-fac-x')){
+      var x = document.createElement('button');
+      x.type = 'button'; x.className = 'ia-fac-x'; x.title = 'Cerrar'; x.textContent = '✕';
+      x.addEventListener('click', function(){ el.remove(); });
+      el.appendChild(x);
+    }
+    if(segundos){
+      setTimeout(function(){ el.classList.add('saliendo'); setTimeout(function(){ el.remove(); }, 450); }, segundos * 1000);
+    }
+  }
   function iaFacResumen(f){
     var partes = [];
     partes.push((f.tipo === 'Presupuesto' ? 'Presupuesto' : 'Factura' + (f.letra ? ' ' + f.letra : '')) + (f.numero ? ' N° ' + f.numero : ''));
@@ -4222,12 +4238,14 @@
       if(f.problema){
         el.className = 'ia-fac-item err';
         el.innerHTML = '<div class="t">No la cargué: ' + escapeHtml(f.problema) + '</div>' + (f.proveedor ? '<div class="m">' + escapeHtml(f.proveedor) + (f.total ? ' · ' + fmtMoneyDec(f.total) : '') + '</div>' : '') + '<div class="m">Si hace falta, cargala a mano con "+ Agregar factura".</div>';
+        iaFacCerrable(el);
         return;
       }
       var rep = iaFacRepetida(f);
       if(rep){
         el.className = 'ia-fac-item err';
         el.innerHTML = iaFacResumen(f) + '<div class="m">Ya estaba cargada (' + escapeHtml(rep.estado || 'pendiente') + '), no la cargué de nuevo.</div>';
+        iaFacCerrable(el, 6);
         return;
       }
       el.innerHTML = iaFacResumen(f) + '<div class="ia-fac-q"><span class="m" style="flex-basis:100%">¿La pagaste en efectivo?</span>' +
@@ -4237,19 +4255,22 @@
           var b = ev.target.closest('button'); if(!b) return;
           Array.prototype.forEach.call(el.querySelectorAll('.ia-fac-q button'), function(x){ x.disabled = true; });
           var r = b.getAttribute('data-r');
-          if(r === 'x'){ el.innerHTML = iaFacResumen(f) + '<div class="m">No la cargué.</div>'; resolve(); return; }
+          if(r === 'x'){ el.innerHTML = iaFacResumen(f) + '<div class="m">No la cargué.</div>'; iaFacCerrable(el, 3); resolve(); return; }
           iaFacGuardar(f, r === 'si').then(function(txt){
             el.className = 'ia-fac-item ok';
             el.innerHTML = iaFacResumen(f) + '<div class="m">✅ ' + escapeHtml(txt) + '</div>';
+            iaFacCerrable(el, 6);
           }).catch(function(err){
             el.className = 'ia-fac-item err';
             el.innerHTML = iaFacResumen(f) + '<div class="m">No se pudo guardar: ' + escapeHtml((err && err.message) || 'error') + '. Probá de nuevo subiéndola otra vez.</div>';
+            iaFacCerrable(el);
           }).then(resolve);
         });
       });
     }).catch(function(err){
       el.className = 'ia-fac-item err';
       el.innerHTML = '<div class="t">No pude leer ' + escapeHtml(file.name || 'la factura') + '</div><div class="m">' + escapeHtml((err && err.message) || 'Error desconocido') + '</div>';
+      iaFacCerrable(el);
     });
   }
 
